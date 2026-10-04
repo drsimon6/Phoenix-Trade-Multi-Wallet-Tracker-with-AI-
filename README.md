@@ -135,7 +135,7 @@ Download the project code from GitHub and enter the project folder:
 
 ```bash
 git clone [https://github.com/drsimon6/Phoenix-Trade-Multi-Wallet-Tracker-.git](https://github.com/drsimon6/Phoenix-Trade-Multi-Wallet-Tracker-.git)
-cd Phoenix-Trade-Multi-Wallet-Tracker-
+cd Phoenix-Trade-Multi-Wallet-Tracker-with-AI-
 
 ```
 
