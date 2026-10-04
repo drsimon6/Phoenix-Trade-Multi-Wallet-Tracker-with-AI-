@@ -44,7 +44,17 @@ AI_PROVIDERS = [
     },
     {
         "provider": "openrouter",
-        "api_key": "YOUR_OPENROUTER_API_KEY",
+        "api_key": "sk-or-v1-0d6afba4444fdb3fa81827c8...",  # کلید دریافت شده از openrouter.ai
         "model": "google/gemini-2.0-flash-exp:free"
+    },
+    {
+        "provider": "deepseek",
+        "api_key": "کلید_دریافتی_از_platform.deepseek.com",  # کلید دریافت شده از DeepSeek
+        "model": "deepseek-chat"
+    },
+    {
+        "provider": "agentrouter",
+        "api_key": "کلید_دریافتی_از_agentrouter.org",       # کلید دریافت شده از AgentRouter
+        "model": "gpt-4o"
     }
 ]
