@@ -20,7 +20,7 @@ except ImportError:
     print(f"\n⚠️ Error: '{config_name}.py' not found!")
     sys.exit(1)
 
-# Wallet Configuration
+# Wallet & Bot Configuration
 TARGET_WALLETS = config.TARGET_WALLETS
 POLL_INTERVAL = getattr(config, 'POLL_INTERVAL', 2)
 TELEGRAM_BOT_TOKEN = config.TELEGRAM_BOT_TOKEN
@@ -153,12 +153,16 @@ async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_
         return ""
 
     logs_text = " ".join(logs[:15])
+    
     prompt = (
-        f"یک تراکنش جدید در صرافی سولانا (پلتفرم Phoenix - بخش {market_type}) انجام شد.\n"
-        f"نوع حرکت: {action_type}\n"
-        f"لاگ‌های تراکنش: {logs_text}\n\n"
-        f"لطفاً در ۱ یا ۲ جمله بسیار کوتاه، روان و بدون مقدمه به زبان فارسی توضیح بده این کاربر چه هک یا استراتژی انجام داده "
-        f"(مثلاً سفارش جدید گذاشته، سفارش لغو کرده یا مارکت خرید کرده). کاملاً خلاصه و روان."
+        f"نقش تو: یک تحلیل‌گر ارشد معاملات کریپتو روی شبکه سولانا هستی.\n"
+        f"محیط معامله: صرافی Phoenix - بخش {market_type}\n"
+        f"نوع حرکت شناسایی‌شده: {action_type}\n"
+        f"لاگ‌های خام تراکنش: {logs_text}\n\n"
+        f"وظیفه:\n"
+        f"۱. در حداکثر ۱ تا ۲ جمله بسیار کوتاه و روان به زبان فارسی تحلیل کن این معامله‌گر دقیقاً چه نقشه یا حرکتی انجام داده است (مثلاً ثبت سفارش خرید/فروش لیمیت، معامله فوری مارکت، لغو سفارش برای جابه‌جایی نقدینگی).\n"
+        f"۲. به هیچ وجه از مقدمه، سلام، نتیجه‌گیری یا عبارت‌هایی مثل 'بر اساس لاگ‌ها' استفاده نکن.\n"
+        f"۳. فقط اصل تحلیل کاربردی را تحویل بده."
     )
 
     for item in AI_PROVIDERS:
@@ -181,11 +185,11 @@ async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_
                 result = await call_openrouter(session, key, model, prompt)
 
             if result:
-                # Clean HTML tags from AI response to prevent Telegram parsing errors
+                # Sanitize HTML tags to prevent Telegram parse errors
                 result = result.replace("<", "&lt;").replace(">", "&gt;")
                 return f"\n🤖 <b>تحلیل هوش مصنوعی ({provider.capitalize()}):</b>\n<i>{result}</i>\n"
         except Exception:
-            continue  # Failover to next AI provider if any error occurs
+            continue  # Fallback to next AI provider
 
     return ""
 
@@ -261,7 +265,7 @@ async def monitor_wallet(session: aiohttp.ClientSession, wallet_addr: str, walle
             raw_logs = tx_info.get("meta", {}).get("logMessages", []) if tx_info else []
             action_type = quick_detect_action(raw_logs)
             
-            # Fetch AI Analysis with multi-provider fallback
+            # Fetch AI Analysis
             ai_analysis = await get_ai_tx_analysis(session, raw_logs, action_type, phoenix_market_type)
             phoenix_portfolio_url = f"https://www.phoenix.trade/portfolio?ghost={wallet_addr}"
 
