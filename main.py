@@ -107,7 +107,7 @@ async def fetch_rpc(session: aiohttp.ClientSession, method: str, params: list):
 async def call_gemini(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    async with session.post(url, json=payload, timeout=4) as resp:
+    async with session.post(url, json=payload, timeout=12) as resp:
         if resp.status == 200:
             data = await resp.json()
             return data['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -118,7 +118,7 @@ async def call_groq(session: aiohttp.ClientSession, key: str, model: str, prompt
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     payload = {"model": model or "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
-    async with session.post(url, headers=headers, json=payload, timeout=4) as resp:
+    async with session.post(url, headers=headers, json=payload, timeout=12) as resp:
         if resp.status == 200:
             data = await resp.json()
             return data['choices'][0]['message']['content'].strip()
@@ -129,7 +129,7 @@ async def call_mistral(session: aiohttp.ClientSession, key: str, model: str, pro
     url = "https://api.mistral.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     payload = {"model": model or "mistral-small-latest", "messages": [{"role": "user", "content": prompt}]}
-    async with session.post(url, headers=headers, json=payload, timeout=4) as resp:
+    async with session.post(url, headers=headers, json=payload, timeout=12) as resp:
         if resp.status == 200:
             data = await resp.json()
             return data['choices'][0]['message']['content'].strip()
@@ -140,7 +140,7 @@ async def call_openrouter(session: aiohttp.ClientSession, key: str, model: str, 
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     payload = {"model": model or "google/gemini-2.0-flash-exp:free", "messages": [{"role": "user", "content": prompt}]}
-    async with session.post(url, headers=headers, json=payload, timeout=4) as resp:
+    async with session.post(url, headers=headers, json=payload, timeout=12) as resp:
         if resp.status == 200:
             data = await resp.json()
             return data['choices'][0]['message']['content'].strip()
@@ -151,7 +151,7 @@ async def call_deepseek(session: aiohttp.ClientSession, key: str, model: str, pr
     url = "https://api.deepseek.com/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     payload = {"model": model or "deepseek-chat", "messages": [{"role": "user", "content": prompt}]}
-    async with session.post(url, headers=headers, json=payload, timeout=4) as resp:
+    async with session.post(url, headers=headers, json=payload, timeout=12) as resp:
         if resp.status == 200:
             data = await resp.json()
             return data['choices'][0]['message']['content'].strip()
@@ -162,7 +162,7 @@ async def call_agentrouter(session: aiohttp.ClientSession, key: str, model: str,
     url = "https://agentrouter.org/v1/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     payload = {"model": model or "gpt-4o", "messages": [{"role": "user", "content": prompt}]}
-    async with session.post(url, headers=headers, json=payload, timeout=4) as resp:
+    async with session.post(url, headers=headers, json=payload, timeout=12) as resp:
         if resp.status == 200:
             data = await resp.json()
             return data['choices'][0]['message']['content'].strip()
