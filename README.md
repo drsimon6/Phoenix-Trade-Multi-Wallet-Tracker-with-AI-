@@ -134,7 +134,7 @@ sudo apt install git python3 python3-pip python3-venv screen -y
 Download the project code from GitHub and enter the project folder:
 
 ```bash
-git clone [https://github.com/drsimon6/Phoenix-Trade-Multi-Wallet-Tracker-.git](https://github.com/drsimon6/Phoenix-Trade-Multi-Wallet-Tracker-.git)
+git clone [https://github.com/drsimon6/Phoenix-Trade-Multi-Wallet-Tracker-with-AI-.git](https://github.com/drsimon6/Phoenix-Trade-Multi-Wallet-Tracker-with-AI-.git)
 cd Phoenix-Trade-Multi-Wallet-Tracker-with-AI-
 
 ```
