@@ -70,7 +70,7 @@ async def send_telegram_alert(session: aiohttp.ClientSession, message: str):
         "disable_web_page_preview": True
     }
     try:
-        async with session.post(url, json=payload, timeout=5) as resp:
+        async with session.post(url, json=payload, timeout=8) as resp:
             if resp.status != 200:
                 pass
     except Exception:
@@ -85,7 +85,7 @@ async def fetch_rpc(session: aiohttp.ClientSession, method: str, params: list):
     for _ in range(attempts):
         rpc_url = get_next_rpc_url()
         try:
-            async with session.post(rpc_url, json=payload, timeout=5) as resp:
+            async with session.post(rpc_url, json=payload, timeout=8) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     if "result" in data:
@@ -102,15 +102,21 @@ async def fetch_rpc(session: aiohttp.ClientSession, method: str, params: list):
 
 
 # =====================================================================
-# --- Multi-AI Provider Fallback Module ---
+# --- Multi-AI Provider Fallback Module with Detailed Logging ---
 # =====================================================================
 async def call_gemini(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model or 'gemini-2.0-flash'}:generateContent?key={key}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    async with session.post(url, json=payload, timeout=12) as resp:
-        if resp.status == 200:
-            data = await resp.json()
-            return data['candidates'][0]['content']['parts'][0]['text'].strip()
+    try:
+        async with session.post(url, json=payload, timeout=8) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data['candidates'][0]['content']['parts'][0]['text'].strip()
+            else:
+                err_text = await resp.text()
+                print(f"⚠️ Gemini HTTP Error [{resp.status}]: {err_text[:150]}")
+    except Exception as e:
+        print(f"⚠️ Gemini Exception: {e}")
     return ""
 
 
@@ -118,10 +124,16 @@ async def call_groq(session: aiohttp.ClientSession, key: str, model: str, prompt
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     payload = {"model": model or "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
-    async with session.post(url, headers=headers, json=payload, timeout=12) as resp:
-        if resp.status == 200:
-            data = await resp.json()
-            return data['choices'][0]['message']['content'].strip()
+    try:
+        async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data['choices'][0]['message']['content'].strip()
+            else:
+                err_text = await resp.text()
+                print(f"⚠️ Groq HTTP Error [{resp.status}]: {err_text[:150]}")
+    except Exception as e:
+        print(f"⚠️ Groq Exception: {e}")
     return ""
 
 
@@ -129,10 +141,16 @@ async def call_mistral(session: aiohttp.ClientSession, key: str, model: str, pro
     url = "https://api.mistral.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     payload = {"model": model or "mistral-small-latest", "messages": [{"role": "user", "content": prompt}]}
-    async with session.post(url, headers=headers, json=payload, timeout=12) as resp:
-        if resp.status == 200:
-            data = await resp.json()
-            return data['choices'][0]['message']['content'].strip()
+    try:
+        async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data['choices'][0]['message']['content'].strip()
+            else:
+                err_text = await resp.text()
+                print(f"⚠️ Mistral HTTP Error [{resp.status}]: {err_text[:150]}")
+    except Exception as e:
+        print(f"⚠️ Mistral Exception: {e}")
     return ""
 
 
@@ -140,10 +158,16 @@ async def call_openrouter(session: aiohttp.ClientSession, key: str, model: str, 
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     payload = {"model": model or "google/gemini-2.0-flash-exp:free", "messages": [{"role": "user", "content": prompt}]}
-    async with session.post(url, headers=headers, json=payload, timeout=12) as resp:
-        if resp.status == 200:
-            data = await resp.json()
-            return data['choices'][0]['message']['content'].strip()
+    try:
+        async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data['choices'][0]['message']['content'].strip()
+            else:
+                err_text = await resp.text()
+                print(f"⚠️ OpenRouter HTTP Error [{resp.status}]: {err_text[:150]}")
+    except Exception as e:
+        print(f"⚠️ OpenRouter Exception: {e}")
     return ""
 
 
@@ -151,21 +175,33 @@ async def call_deepseek(session: aiohttp.ClientSession, key: str, model: str, pr
     url = "https://api.deepseek.com/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     payload = {"model": model or "deepseek-chat", "messages": [{"role": "user", "content": prompt}]}
-    async with session.post(url, headers=headers, json=payload, timeout=12) as resp:
-        if resp.status == 200:
-            data = await resp.json()
-            return data['choices'][0]['message']['content'].strip()
+    try:
+        async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data['choices'][0]['message']['content'].strip()
+            else:
+                err_text = await resp.text()
+                print(f"⚠️ DeepSeek HTTP Error [{resp.status}]: {err_text[:150]}")
+    except Exception as e:
+        print(f"⚠️ DeepSeek Exception: {e}")
     return ""
 
 
 async def call_agentrouter(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
     url = "https://agentrouter.org/v1/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    payload = {"model": model or "gpt-4o", "messages": [{"role": "user", "content": prompt}]}
-    async with session.post(url, headers=headers, json=payload, timeout=12) as resp:
-        if resp.status == 200:
-            data = await resp.json()
-            return data['choices'][0]['message']['content'].strip()
+    payload = {"model": model or "deepseek-v4-flash", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
+    try:
+        async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data['choices'][0]['message']['content'].strip()
+            else:
+                err_text = await resp.text()
+                print(f"⚠️ AgentRouter HTTP Error [{resp.status}]: {err_text[:150]}")
+    except Exception as e:
+        print(f"⚠️ AgentRouter Exception: {e}")
     return ""
 
 
@@ -214,8 +250,9 @@ async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_
                 # Sanitize HTML tags to prevent Telegram parse errors
                 result = result.replace("<", "&lt;").replace(">", "&gt;")
                 return f"\n🤖 <b>تحلیل هوش مصنوعی ({provider.capitalize()}):</b>\n<i>{result}</i>\n"
-        except Exception:
-            continue  # Fallback to next AI provider if an error occurs
+        except Exception as e:
+            print(f"⚠️ AI Exception on [{provider}]: {e}")
+            continue  # Fallback to next AI provider
 
     return ""
 
