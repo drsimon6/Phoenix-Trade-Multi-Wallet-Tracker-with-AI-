@@ -5,6 +5,7 @@ from datetime import datetime
 import sys
 import itertools
 import importlib
+from playwright.async_api import async_playwright
 
 # =====================================================================
 # --- Dynamic Configuration Loader ---
@@ -32,7 +33,7 @@ PHOENIX_PROGRAMS = {
     "EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih": "Phoenix Eternal (Perps) ⚡"
 }
 
-# Helius + Backup RPC Setup (Auto-failover enabled)
+# RPC Setup (Helius + Auto-failover Backups)
 HELIUS_API_KEYS = getattr(config, 'HELIUS_API_KEYS', [])
 if not HELIUS_API_KEYS and hasattr(config, 'HELIUS_API_KEY') and config.HELIUS_API_KEY:
     HELIUS_API_KEYS = [config.HELIUS_API_KEY]
@@ -45,7 +46,6 @@ backup_rpcs = getattr(config, 'RPC_URLS', [
     "https://rpc.ankr.com/solana"
 ])
 
-# Combine Primary Helius with Backup RPCs
 RPC_URLS = helius_urls + [url for url in backup_rpcs if url not in helius_urls]
 helius_cycle = itertools.cycle(RPC_URLS) if RPC_URLS else None
 
@@ -70,9 +70,8 @@ async def send_telegram_alert(session: aiohttp.ClientSession, message: str):
         "disable_web_page_preview": True
     }
     try:
-        async with session.post(url, json=payload, timeout=8) as resp:
-            if resp.status != 200:
-                pass
+        async with session.post(url, json=payload, timeout=10) as resp:
+            pass
     except Exception:
         pass
 
@@ -101,10 +100,43 @@ async def fetch_rpc(session: aiohttp.ClientSession, method: str, params: list):
     return None
 
 
+# =====================================================================
+# --- Headless Chromium Scraping (Playwright) ---
+# =====================================================================
+async def get_phoenix_portfolio_snapshot(wallet_addr: str) -> str:
+    """Launches headless Chromium, renders Phoenix React dApp, and extracts portfolio text."""
+    url = f"https://www.phoenix.trade/portfolio/value/all?ghost={wallet_addr}"
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            )
+            page = await browser.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            
+            # Wait for JS React components to load portfolio data
+            await page.wait_for_timeout(4000)
+
+            body_text = await page.inner_text("body")
+            await browser.close()
+
+            lines = [line.strip() for line in body_text.split('\n') if line.strip()]
+            relevant_lines = [
+                l for l in lines 
+                if any(kw in l.lower() for kw in ["position", "order", "size", "value", "entry", "price", "margin", "pnl", "upnl", "balance", "ena", "sol", "btc", "eth"])
+            ]
+            
+            return "\n".join(relevant_lines[:60]) if relevant_lines else body_text[:1200]
+    except Exception as e:
+        print(f"⚠️ Scraping Warning: {e}")
+        return "اطلاعات وب‌سایت در دسترس نیست (تکیه بر لاگ‌های آن‌چین)."
+
+
 def extract_balance_changes(tx_info: dict) -> str:
     """Extracts human-readable token balance changes from transaction metadata."""
     if not tx_info or "meta" not in tx_info:
-        return "اطلاعات تغییرات بالانس در دسترس نیست."
+        return "تغییرات بالانس ثبت نشده است."
 
     meta = tx_info["meta"]
     pre_balances = meta.get("preTokenBalances", [])
@@ -127,23 +159,20 @@ def extract_balance_changes(tx_info: dict) -> str:
             sign = "+" if diff > 0 else ""
             changes.append(f"• توکن ({symbol}): {sign}{diff:,.4f} (موجودی جدید: {post_amount:,.4f})")
 
-    return "\n".join(changes) if changes else "تغییرات مستقیمی در موجودی توکن‌ها ثبت نشده (ممکن است سفارش لیمیت بدون اجرا در Orderbook باشد)."
+    return "\n".join(changes) if changes else "تغییر مستقیمی در کیف‌پول اصلی صورت نگرفته (مدیریت پوزیشن/مارجین داخل صرافی)."
 
 
 # =====================================================================
-# --- Multi-AI Provider Handlers ---
+# --- AI Providers Handlers ---
 # =====================================================================
 async def call_gemini(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model or 'gemini-2.0-flash'}:generateContent?key={key}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     try:
-        async with session.post(url, json=payload, timeout=8) as resp:
+        async with session.post(url, json=payload, timeout=10) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 return data['candidates'][0]['content']['parts'][0]['text'].strip()
-            else:
-                err_text = await resp.text()
-                print(f"⚠️ Gemini HTTP Error [{resp.status}]: {err_text[:150]}")
     except Exception as e:
         print(f"⚠️ Gemini Exception: {e}")
     return ""
@@ -155,17 +184,17 @@ async def call_openrouter(session: aiohttp.ClientSession, key: str, model: str, 
     payload = {
         "model": model or "~openai/gpt-sol-latest",
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 200,
+        "max_tokens": 250,
         "temperature": 0.2
     }
     try:
-        async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
+        async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 return data['choices'][0]['message']['content'].strip()
             else:
                 err_text = await resp.text()
-                print(f"⚠️ OpenRouter HTTP Error [{resp.status}]: {err_text[:150]}")
+                print(f"⚠️ OpenRouter Error [{resp.status}]: {err_text[:120]}")
     except Exception as e:
         print(f"⚠️ OpenRouter Exception: {e}")
     return ""
@@ -177,62 +206,40 @@ async def call_deepseek(session: aiohttp.ClientSession, key: str, model: str, pr
     payload = {
         "model": model or "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 200
+        "max_tokens": 250
     }
     try:
-        async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
+        async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 return data['choices'][0]['message']['content'].strip()
-            else:
-                err_text = await resp.text()
-                print(f"⚠️ DeepSeek HTTP Error [{resp.status}]: {err_text[:150]}")
     except Exception as e:
         print(f"⚠️ DeepSeek Exception: {e}")
     return ""
 
 
-async def call_agentrouter(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
-    url = "https://agentrouter.org/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    payload = {
-        "model": model or "gpt-4o",
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 200,
-        "temperature": 0.2
-    }
-    try:
-        async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return data['choices'][0]['message']['content'].strip()
-            else:
-                err_text = await resp.text()
-                print(f"⚠️ AgentRouter HTTP Error [{resp.status}]: {err_text[:150]}")
-    except Exception as e:
-        print(f"⚠️ AgentRouter Exception: {e}")
-    return ""
-
-
-async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_type: str, market_type: str, balance_summary: str) -> str:
-    """Sends enriched transaction data and balance changes to AI for professional analysis."""
-    if not AI_PROVIDERS or not logs:
+async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_type: str, market_type: str, balance_summary: str, portfolio_snapshot: str) -> str:
+    """Combines live web scraping data + on-chain logs for high-accuracy AI analysis."""
+    if not AI_PROVIDERS:
         return ""
 
-    logs_text = " ".join(logs[:20])
+    logs_text = " ".join(logs[:15])
 
     prompt = (
-        f"نقش تو: تحلیل‌گر ارشد معاملات کریپتو و Smart Money روی شبکه سولانا و صرافی Phoenix.\n\n"
-        f"📊 **داده‌های تراکنش:**\n"
-        f"- بخش صرافی: {market_type}\n"
-        f"- نوع دستور: {action_type}\n"
-        f"- تغییرات موجودی ولت (Balance Changes):\n{balance_summary}\n\n"
-        f"📜 **لاگ‌های خام تراکنش:**\n{logs_text}\n\n"
+        f"نقش تو: تحلیل‌گر ارشد معاملات فیوچرز (Perpetuals) صرافی Phoenix روی سولانا.\n\n"
+        f"📊 **اطلاعات استخراج‌شده از صفحه پورتفولیوی زنده صرافی (Phoenix UI):**\n"
+        f"{portfolio_snapshot}\n\n"
+        f"🌐 **مشخصات دستور شبکه:**\n"
+        f"- بخش: {market_type}\n"
+        f"- دستور: {action_type}\n"
+        f"- تغییرات بالانس ولت: {balance_summary}\n"
+        f"- لاگ‌های فنی: {logs_text}\n\n"
         f"🎯 **وظیفه:**\n"
-        f"در حداکثر ۲ تا ۳ جمله کوتاه، دقیق و عددی به زبان فارسی تحلیل کن:\n"
-        f"۱. چه ارزی معامله یا مدیریت شده و حجم دقیق آن چقدر بوده است؟\n"
-        f"۲. استراتژی دقیق معامله‌گر چیست (مثلاً ثبت لیمیت خرید جهت اسپردگیری، باز کردن/بستن پوزیشن پرپ، لغو سفارش برای آزادسازی مارجین)؟\n\n"
-        f"⚠️ **قواعد:** از مقدمه‌چینی، سلام، یا عباراتی مثل 'بر اساس لاگ‌ها' اکیداً خودداری کن. فقط تحلیل کاربردی تحویل بده."
+        f"با ترکیب داده‌های زنده صفحه پورتفولیو و دستور جدید، در ۳ خط کوتاه و با ذکر اعداد تحلیل کن:\n"
+        f"۱. چه ارزی معامله شده، حجم پوزیشن (Size) و قیمت چقدر است؟\n"
+        f"۲. وضعیت PnL و مارجین فعلی پوزیشن معامله‌گر چیست؟\n"
+        f"۳. استراتژی این دستور جدید (مثلاً لیمیت اردر، بستن سود، اصلاح مارجین) دقیقاً چیست؟\n\n"
+        f"⚠️ **قواعد:** بدون سلام، مقدمه یا عبارت‌های کلیشه. فقط تحلیل عددی و کاربردی تحویل بده."
     )
 
     for item in AI_PROVIDERS:
@@ -251,14 +258,12 @@ async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_
                 result = await call_gemini(session, key, model, prompt)
             elif provider == "deepseek":
                 result = await call_deepseek(session, key, model, prompt)
-            elif provider == "agentrouter":
-                result = await call_agentrouter(session, key, model, prompt)
 
             if result:
                 result = result.replace("<", "&lt;").replace(">", "&gt;")
-                return f"\n🧠 <b>تحلیل هوشمند معامله:</b>\n<i>{result}</i>\n"
+                return f"\n🧠 <b>تحلیل هوشمند معامله (داده‌های زنده پورتفولیو):</b>\n<i>{result}</i>\n"
         except Exception as e:
-            print(f"⚠️ AI Exception on [{provider}]: {e}")
+            print(f"⚠️ AI Exec Error [{provider}]: {e}")
             continue
 
     return ""
@@ -332,12 +337,15 @@ async def monitor_wallet(session: aiohttp.ClientSession, wallet_addr: str, walle
             raw_logs = tx_info.get("meta", {}).get("logMessages", []) if tx_info else []
             action_type = quick_detect_action(raw_logs)
 
-            # Extract balance changes
+            # 1. Extract balance changes
             balance_summary = extract_balance_changes(tx_info)
 
-            # Fetch AI Analysis with enriched context
-            ai_analysis = await get_ai_tx_analysis(session, raw_logs, action_type, phoenix_market_type, balance_summary)
-            phoenix_portfolio_url = f"https://www.phoenix.trade/portfolio?ghost={wallet_addr}"
+            # 2. Scrape live web portfolio via Headless Chromium
+            portfolio_snapshot = await get_phoenix_portfolio_snapshot(wallet_addr)
+
+            # 3. AI Analysis with enriched web + on-chain context
+            ai_analysis = await get_ai_tx_analysis(session, raw_logs, action_type, phoenix_market_type, balance_summary, portfolio_snapshot)
+            phoenix_portfolio_url = f"https://www.phoenix.trade/portfolio/value/all?ghost={wallet_addr}"
 
             alert_text = (
                 f"🦅 <b>تراکنش جدید Phoenix ثبت شد!</b>\n\n"
@@ -362,7 +370,7 @@ async def main():
     last_signatures = {}
 
     async with aiohttp.ClientSession() as session:
-        await send_telegram_alert(session, f"🚀 <b>Phoenix Multi-Wallet Tracker Active ({config_name}.py).</b>")
+        await send_telegram_alert(session, f"🚀 <b>Phoenix Tracker Active ({config_name}.py) with Playwright Web Scraping.</b>")
 
         while True:
             start_time = time.time()
