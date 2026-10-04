@@ -116,8 +116,8 @@ async def call_gemini(session: aiohttp.ClientSession, key: str, model: str, prom
 
 async def call_groq(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {key}"}
-    payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    payload = {"model": model or "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
     async with session.post(url, headers=headers, json=payload, timeout=4) as resp:
         if resp.status == 200:
             data = await resp.json()
@@ -127,8 +127,8 @@ async def call_groq(session: aiohttp.ClientSession, key: str, model: str, prompt
 
 async def call_mistral(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
     url = "https://api.mistral.ai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {key}"}
-    payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    payload = {"model": model or "mistral-small-latest", "messages": [{"role": "user", "content": prompt}]}
     async with session.post(url, headers=headers, json=payload, timeout=4) as resp:
         if resp.status == 200:
             data = await resp.json()
@@ -138,8 +138,30 @@ async def call_mistral(session: aiohttp.ClientSession, key: str, model: str, pro
 
 async def call_openrouter(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
     url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {key}"}
-    payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    payload = {"model": model or "google/gemini-2.0-flash-exp:free", "messages": [{"role": "user", "content": prompt}]}
+    async with session.post(url, headers=headers, json=payload, timeout=4) as resp:
+        if resp.status == 200:
+            data = await resp.json()
+            return data['choices'][0]['message']['content'].strip()
+    return ""
+
+
+async def call_deepseek(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
+    url = "https://api.deepseek.com/chat/completions"
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    payload = {"model": model or "deepseek-chat", "messages": [{"role": "user", "content": prompt}]}
+    async with session.post(url, headers=headers, json=payload, timeout=4) as resp:
+        if resp.status == 200:
+            data = await resp.json()
+            return data['choices'][0]['message']['content'].strip()
+    return ""
+
+
+async def call_agentrouter(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
+    url = "https://agentrouter.org/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    payload = {"model": model or "gpt-4o", "messages": [{"role": "user", "content": prompt}]}
     async with session.post(url, headers=headers, json=payload, timeout=4) as resp:
         if resp.status == 200:
             data = await resp.json()
@@ -183,13 +205,17 @@ async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_
                 result = await call_mistral(session, key, model, prompt)
             elif provider == "openrouter":
                 result = await call_openrouter(session, key, model, prompt)
+            elif provider == "deepseek":
+                result = await call_deepseek(session, key, model, prompt)
+            elif provider == "agentrouter":
+                result = await call_agentrouter(session, key, model, prompt)
 
             if result:
                 # Sanitize HTML tags to prevent Telegram parse errors
                 result = result.replace("<", "&lt;").replace(">", "&gt;")
                 return f"\n🤖 <b>تحلیل هوش مصنوعی ({provider.capitalize()}):</b>\n<i>{result}</i>\n"
         except Exception:
-            continue  # Fallback to next AI provider
+            continue  # Fallback to next AI provider if an error occurs
 
     return ""
 
@@ -265,7 +291,7 @@ async def monitor_wallet(session: aiohttp.ClientSession, wallet_addr: str, walle
             raw_logs = tx_info.get("meta", {}).get("logMessages", []) if tx_info else []
             action_type = quick_detect_action(raw_logs)
             
-            # Fetch AI Analysis
+            # Fetch AI Analysis with multi-provider fallback
             ai_analysis = await get_ai_tx_analysis(session, raw_logs, action_type, phoenix_market_type)
             phoenix_portfolio_url = f"https://www.phoenix.trade/portfolio?ghost={wallet_addr}"
 
