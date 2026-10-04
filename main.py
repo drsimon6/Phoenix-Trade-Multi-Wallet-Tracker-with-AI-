@@ -101,8 +101,37 @@ async def fetch_rpc(session: aiohttp.ClientSession, method: str, params: list):
     return None
 
 
+def extract_balance_changes(tx_info: dict) -> str:
+    """Extracts human-readable token balance changes from transaction metadata."""
+    if not tx_info or "meta" not in tx_info:
+        return "اطلاعات تغییرات بالانس در دسترس نیست."
+
+    meta = tx_info["meta"]
+    pre_balances = meta.get("preTokenBalances", [])
+    post_balances = meta.get("postTokenBalances", [])
+
+    changes = []
+    pre_map = {b.get("accountIndex"): b for b in pre_balances if b.get("accountIndex") is not None}
+
+    for post in post_balances:
+        idx = post.get("accountIndex")
+        mint = post.get("mint", "Unknown")
+        post_amount = float(post.get("uiTokenAmount", {}).get("uiAmount") or 0)
+
+        pre = pre_map.get(idx, {})
+        pre_amount = float(pre.get("uiTokenAmount", {}).get("uiAmount") or 0) if pre else 0.0
+
+        diff = post_amount - pre_amount
+        if abs(diff) > 0.000001:
+            symbol = mint[:4] + "..." + mint[-4:] if len(mint) > 10 else mint
+            sign = "+" if diff > 0 else ""
+            changes.append(f"• توکن ({symbol}): {sign}{diff:,.4f} (موجودی جدید: {post_amount:,.4f})")
+
+    return "\n".join(changes) if changes else "تغییرات مستقیمی در موجودی توکن‌ها ثبت نشده (ممکن است سفارش لیمیت بدون اجرا در Orderbook باشد)."
+
+
 # =====================================================================
-# --- Multi-AI Provider Fallback Module with Detailed Logging ---
+# --- Multi-AI Provider Handlers ---
 # =====================================================================
 async def call_gemini(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model or 'gemini-2.0-flash'}:generateContent?key={key}"
@@ -120,44 +149,15 @@ async def call_gemini(session: aiohttp.ClientSession, key: str, model: str, prom
     return ""
 
 
-async def call_groq(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    payload = {"model": model or "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
-    try:
-        async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return data['choices'][0]['message']['content'].strip()
-            else:
-                err_text = await resp.text()
-                print(f"⚠️ Groq HTTP Error [{resp.status}]: {err_text[:150]}")
-    except Exception as e:
-        print(f"⚠️ Groq Exception: {e}")
-    return ""
-
-
-async def call_mistral(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
-    url = "https://api.mistral.ai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    payload = {"model": model or "mistral-small-latest", "messages": [{"role": "user", "content": prompt}]}
-    try:
-        async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return data['choices'][0]['message']['content'].strip()
-            else:
-                err_text = await resp.text()
-                print(f"⚠️ Mistral HTTP Error [{resp.status}]: {err_text[:150]}")
-    except Exception as e:
-        print(f"⚠️ Mistral Exception: {e}")
-    return ""
-
-
 async def call_openrouter(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    payload = {"model": model or "google/gemini-2.0-flash-exp:free", "messages": [{"role": "user", "content": prompt}]}
+    payload = {
+        "model": model or "~openai/gpt-sol-latest",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 200,
+        "temperature": 0.2
+    }
     try:
         async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
             if resp.status == 200:
@@ -174,7 +174,11 @@ async def call_openrouter(session: aiohttp.ClientSession, key: str, model: str, 
 async def call_deepseek(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
     url = "https://api.deepseek.com/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    payload = {"model": model or "deepseek-chat", "messages": [{"role": "user", "content": prompt}]}
+    payload = {
+        "model": model or "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 200
+    }
     try:
         async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
             if resp.status == 200:
@@ -191,7 +195,12 @@ async def call_deepseek(session: aiohttp.ClientSession, key: str, model: str, pr
 async def call_agentrouter(session: aiohttp.ClientSession, key: str, model: str, prompt: str) -> str:
     url = "https://agentrouter.org/v1/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    payload = {"model": model or "deepseek-v4-flash", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
+    payload = {
+        "model": model or "gpt-4o",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 200,
+        "temperature": 0.2
+    }
     try:
         async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
             if resp.status == 200:
@@ -205,22 +214,25 @@ async def call_agentrouter(session: aiohttp.ClientSession, key: str, model: str,
     return ""
 
 
-async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_type: str, market_type: str) -> str:
-    """Tries AI providers sequentially in order of priority until one succeeds."""
+async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_type: str, market_type: str, balance_summary: str) -> str:
+    """Sends enriched transaction data and balance changes to AI for professional analysis."""
     if not AI_PROVIDERS or not logs:
         return ""
 
-    logs_text = " ".join(logs[:15])
-    
+    logs_text = " ".join(logs[:20])
+
     prompt = (
-        f"نقش تو: یک تحلیل‌گر ارشد معاملات کریپتو روی شبکه سولانا هستی.\n"
-        f"محیط معامله: صرافی Phoenix - بخش {market_type}\n"
-        f"نوع حرکت شناسایی‌شده: {action_type}\n"
-        f"لاگ‌های خام تراکنش: {logs_text}\n\n"
-        f"وظیفه:\n"
-        f"۱. در حداکثر ۱ تا ۲ جمله بسیار کوتاه و روان به زبان فارسی تحلیل کن این معامله‌گر دقیقاً چه نقشه یا حرکتی انجام داده است (مثلاً ثبت سفارش خرید/فروش لیمیت، معامله فوری مارکت، لغو سفارش برای جابه‌جایی نقدینگی).\n"
-        f"۲. به هیچ وجه از مقدمه، سلام، نتیجه‌گیری یا عبارت‌هایی مثل 'بر اساس لاگ‌ها' استفاده نکن.\n"
-        f"۳. فقط اصل تحلیل کاربردی را تحویل بده."
+        f"نقش تو: تحلیل‌گر ارشد معاملات کریپتو و Smart Money روی شبکه سولانا و صرافی Phoenix.\n\n"
+        f"📊 **داده‌های تراکنش:**\n"
+        f"- بخش صرافی: {market_type}\n"
+        f"- نوع دستور: {action_type}\n"
+        f"- تغییرات موجودی ولت (Balance Changes):\n{balance_summary}\n\n"
+        f"📜 **لاگ‌های خام تراکنش:**\n{logs_text}\n\n"
+        f"🎯 **وظیفه:**\n"
+        f"در حداکثر ۲ تا ۳ جمله کوتاه، دقیق و عددی به زبان فارسی تحلیل کن:\n"
+        f"۱. چه ارزی معامله یا مدیریت شده و حجم دقیق آن چقدر بوده است؟\n"
+        f"۲. استراتژی دقیق معامله‌گر چیست (مثلاً ثبت لیمیت خرید جهت اسپردگیری، باز کردن/بستن پوزیشن پرپ، لغو سفارش برای آزادسازی مارجین)؟\n\n"
+        f"⚠️ **قواعد:** از مقدمه‌چینی، سلام، یا عباراتی مثل 'بر اساس لاگ‌ها' اکیداً خودداری کن. فقط تحلیل کاربردی تحویل بده."
     )
 
     for item in AI_PROVIDERS:
@@ -233,32 +245,26 @@ async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_
 
         try:
             result = ""
-            if provider == "gemini":
-                result = await call_gemini(session, key, model, prompt)
-            elif provider == "groq":
-                result = await call_groq(session, key, model, prompt)
-            elif provider == "mistral":
-                result = await call_mistral(session, key, model, prompt)
-            elif provider == "openrouter":
+            if provider == "openrouter":
                 result = await call_openrouter(session, key, model, prompt)
+            elif provider == "gemini":
+                result = await call_gemini(session, key, model, prompt)
             elif provider == "deepseek":
                 result = await call_deepseek(session, key, model, prompt)
             elif provider == "agentrouter":
                 result = await call_agentrouter(session, key, model, prompt)
 
             if result:
-                # Sanitize HTML tags to prevent Telegram parse errors
                 result = result.replace("<", "&lt;").replace(">", "&gt;")
-                return f"\n🤖 <b>تحلیل هوش مصنوعی ({provider.capitalize()}):</b>\n<i>{result}</i>\n"
+                return f"\n🧠 <b>تحلیل هوشمند معامله:</b>\n<i>{result}</i>\n"
         except Exception as e:
             print(f"⚠️ AI Exception on [{provider}]: {e}")
-            continue  # Fallback to next AI provider
+            continue
 
     return ""
 
 
 def get_phoenix_type(tx_info: dict) -> str:
-    """Detects whether the transaction interacted with Phoenix Spot or Eternal."""
     if not tx_info:
         return None
     try:
@@ -274,10 +280,9 @@ def get_phoenix_type(tx_info: dict) -> str:
 
 
 def quick_detect_action(logs: list) -> str:
-    """Parses transaction logs to determine the action type."""
     if not logs:
         return "⚡ معامله / مدیریت سفارش"
-    
+
     logs_str = " ".join(logs).lower()
     if "placelimit" in logs_str or "place_limit" in logs_str:
         return "📥 ثبت سفارش لیمیت (Limit Order)"
@@ -285,7 +290,7 @@ def quick_detect_action(logs: list) -> str:
         return "⚡ معامله مارکت (Market Order)"
     elif "cancel" in logs_str:
         return "❌ لغو سفارش (Cancel Order)"
-    
+
     return "⚡ معامله / مدیریت سفارش"
 
 
@@ -314,10 +319,9 @@ async def monitor_wallet(session: aiohttp.ClientSession, wallet_addr: str, walle
             sig = sig_info["signature"]
             err = sig_info.get("err")
             block_time = sig_info.get("blockTime")
-            
+
             tx_info = await fetch_rpc(session, "getTransaction", [sig, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}])
-            
-            # Filter non-Phoenix transactions
+
             phoenix_market_type = get_phoenix_type(tx_info)
             if not phoenix_market_type:
                 continue
@@ -327,9 +331,12 @@ async def monitor_wallet(session: aiohttp.ClientSession, wallet_addr: str, walle
 
             raw_logs = tx_info.get("meta", {}).get("logMessages", []) if tx_info else []
             action_type = quick_detect_action(raw_logs)
-            
-            # Fetch AI Analysis with multi-provider fallback
-            ai_analysis = await get_ai_tx_analysis(session, raw_logs, action_type, phoenix_market_type)
+
+            # Extract balance changes
+            balance_summary = extract_balance_changes(tx_info)
+
+            # Fetch AI Analysis with enriched context
+            ai_analysis = await get_ai_tx_analysis(session, raw_logs, action_type, phoenix_market_type, balance_summary)
             phoenix_portfolio_url = f"https://www.phoenix.trade/portfolio?ghost={wallet_addr}"
 
             alert_text = (
@@ -359,7 +366,7 @@ async def main():
 
         while True:
             start_time = time.time()
-            
+
             tasks = [
                 monitor_wallet(session, addr, name, last_signatures)
                 for addr, name in TARGET_WALLETS.items()
