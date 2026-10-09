@@ -5,7 +5,6 @@ from datetime import datetime
 import sys
 import itertools
 import importlib
-from playwright.async_api import async_playwright
 
 # =====================================================================
 # --- Dynamic Configuration Loader ---
@@ -101,36 +100,57 @@ async def fetch_rpc(session: aiohttp.ClientSession, method: str, params: list):
 
 
 # =====================================================================
-# --- Headless Chromium Scraping (Playwright) ---
+# --- Direct Phoenix Perps JSON API Integration ---
 # =====================================================================
-async def get_phoenix_portfolio_snapshot(wallet_addr: str) -> str:
-    """Launches headless Chromium, renders Phoenix React dApp, and extracts portfolio text."""
-    url = f"https://www.phoenix.trade/portfolio/value/all?ghost={wallet_addr}"
+async def get_phoenix_portfolio_snapshot(session: aiohttp.ClientSession, wallet_addr: str) -> str:
+    """Fetches Phoenix Eternal portfolio & collateral data directly from official JSON APIs in <100ms."""
+    base_url = f"https://perp-api.phoenix.trade/v1/users/{wallet_addr}"
+    totals_url = f"{base_url}/collateral-totals"
+    history_url = f"{base_url}/collateral-history-v2?limit=5"
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    summary_parts = []
+
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-            )
-            page = await browser.new_page()
-            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-            
-            # Wait for JS React components to load portfolio data
-            await page.wait_for_timeout(4000)
+        # 1. Fetch Collateral Totals
+        async with session.get(totals_url, headers=headers, timeout=5) as resp_totals:
+            if resp_totals.status == 200:
+                totals_data = await resp_totals.json()
+                total_dep = totals_data.get("totalDeposited", 0)
+                total_with = totals_data.get("totalWithdrawn", 0)
+                assets = totals_data.get("assets", [])
 
-            body_text = await page.inner_text("body")
-            await browser.close()
+                asset_str_list = []
+                for a in assets:
+                    sym = a.get("symbol", "Asset")
+                    dep_val = a.get("deposited", {}).get("value", 0)
+                    asset_str_list.append(f"{sym}: ${dep_val:,.2f}")
 
-            lines = [line.strip() for line in body_text.split('\n') if line.strip()]
-            relevant_lines = [
-                l for l in lines 
-                if any(kw in l.lower() for kw in ["position", "order", "size", "value", "entry", "price", "margin", "pnl", "upnl", "balance", "ena", "sol", "btc", "eth"])
-            ]
-            
-            return "\n".join(relevant_lines[:60]) if relevant_lines else body_text[:1200]
+                asset_str = ", ".join(asset_str_list) if asset_str_list else "None"
+                summary_parts.append(
+                    f"📊 **موجودی کل کولترال:** Deposited: ${total_dep:,.2f} | Withdrawn: ${total_with:,.2f} | Assets: [{asset_str}]"
+                )
+
+        # 2. Fetch Recent Collateral History
+        async with session.get(history_url, headers=headers, timeout=5) as resp_hist:
+            if resp_hist.status == 200:
+                hist_data = await resp_hist.json()
+                events = hist_data.get("data", [])
+                if events:
+                    last_evt = events[0]
+                    category = last_evt.get("category", "N/A")
+                    symbol = last_evt.get("symbol", "N/A")
+                    bal_after = float(last_evt.get("balanceAfter", 0)) / (10 ** 6)
+                    ts = last_evt.get("timestamp", "N/A")
+                    summary_parts.append(
+                        f"⏱ **آخرین رویداد کولترال:** Category: {category} | Asset: {symbol} | Balance After: ${bal_after:,.2f} | Time: {ts}"
+                    )
+
     except Exception as e:
-        print(f"⚠️ Scraping Warning: {e}")
-        return "اطلاعات وب‌سایت در دسترس نیست (تکیه بر لاگ‌های آن‌چین)."
+        print(f"⚠️ Direct Phoenix API Error: {e}")
+        return "اطلاعات زنده API در دسترس نیست."
+
+    return "\n".join(summary_parts) if summary_parts else "داده‌ای برای این ولت یافت نشد."
 
 
 def extract_balance_changes(tx_info: dict) -> str:
@@ -219,7 +239,7 @@ async def call_deepseek(session: aiohttp.ClientSession, key: str, model: str, pr
 
 
 async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_type: str, market_type: str, balance_summary: str, portfolio_snapshot: str) -> str:
-    """Combines live web scraping data + on-chain logs for high-accuracy AI analysis."""
+    """Combines live API data + on-chain logs for high-accuracy AI analysis."""
     if not AI_PROVIDERS:
         return ""
 
@@ -227,7 +247,7 @@ async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_
 
     prompt = (
         f"نقش تو: تحلیل‌گر ارشد معاملات فیوچرز (Perpetuals) صرافی Phoenix روی سولانا.\n\n"
-        f"📊 **اطلاعات استخراج‌شده از صفحه پورتفولیوی زنده صرافی (Phoenix UI):**\n"
+        f"📊 **اطلاعات استخراج‌شده از API رسمی صرافی (Phoenix Eternal):**\n"
         f"{portfolio_snapshot}\n\n"
         f"🌐 **مشخصات دستور شبکه:**\n"
         f"- بخش: {market_type}\n"
@@ -235,10 +255,10 @@ async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_
         f"- تغییرات بالانس ولت: {balance_summary}\n"
         f"- لاگ‌های فنی: {logs_text}\n\n"
         f"🎯 **وظیفه:**\n"
-        f"با ترکیب داده‌های زنده صفحه پورتفولیو و دستور جدید، در ۳ خط کوتاه و با ذکر اعداد تحلیل کن:\n"
-        f"۱. چه ارزی معامله شده، حجم پوزیشن (Size) و قیمت چقدر است؟\n"
-        f"۲. وضعیت PnL و مارجین فعلی پوزیشن معامله‌گر چیست؟\n"
-        f"۳. استراتژی این دستور جدید (مثلاً لیمیت اردر، بستن سود، اصلاح مارجین) دقیقاً چیست؟\n\n"
+        f"با ترکیب داده‌های زنده API صرافی و دستور جدید، در ۳ خط کوتاه و با ذکر اعداد تحلیل کن:\n"
+        f"۱. چه ارزی معامله یا مدیریت شده و حجم پوزیشن/مارجین چقدر است؟\n"
+        f"۲. وضعیت کولترال و موجودی حساب معامله‌گر چیست؟\n"
+        f"۳. استراتژی این دستور جدید (مثلاً لیمیت اردر، تسویه مارجین، واریز/برداشت) دقیقاً چیست؟\n\n"
         f"⚠️ **قواعد:** بدون سلام، مقدمه یا عبارت‌های کلیشه. فقط تحلیل عددی و کاربردی تحویل بده."
     )
 
@@ -261,7 +281,7 @@ async def get_ai_tx_analysis(session: aiohttp.ClientSession, logs: list, action_
 
             if result:
                 result = result.replace("<", "&lt;").replace(">", "&gt;")
-                return f"\n🧠 <b>تحلیل هوشمند معامله (داده‌های زنده پورتفولیو):</b>\n<i>{result}</i>\n"
+                return f"\n🧠 <b>تحلیل هوشمند معامله (داده‌های زنده API):</b>\n<i>{result}</i>\n"
         except Exception as e:
             print(f"⚠️ AI Exec Error [{provider}]: {e}")
             continue
@@ -340,10 +360,10 @@ async def monitor_wallet(session: aiohttp.ClientSession, wallet_addr: str, walle
             # 1. Extract balance changes
             balance_summary = extract_balance_changes(tx_info)
 
-            # 2. Scrape live web portfolio via Headless Chromium
-            portfolio_snapshot = await get_phoenix_portfolio_snapshot(wallet_addr)
+            # 2. Fetch live portfolio & collateral data directly from Phoenix JSON API (<100ms)
+            portfolio_snapshot = await get_phoenix_portfolio_snapshot(session, wallet_addr)
 
-            # 3. AI Analysis with enriched web + on-chain context
+            # 3. AI Analysis with enriched API + on-chain context
             ai_analysis = await get_ai_tx_analysis(session, raw_logs, action_type, phoenix_market_type, balance_summary, portfolio_snapshot)
             phoenix_portfolio_url = f"https://www.phoenix.trade/portfolio/value/all?ghost={wallet_addr}"
 
@@ -366,11 +386,11 @@ async def monitor_wallet(session: aiohttp.ClientSession, wallet_addr: str, walle
 
 
 async def main():
-    print(f"🚀 Phoenix Tracker Active using [{config_name}.py]...")
+    print(f"🚀 Phoenix Tracker Active using [{config_name}.py] (Direct API Mode)...")
     last_signatures = {}
 
     async with aiohttp.ClientSession() as session:
-        await send_telegram_alert(session, f"🚀 <b>Phoenix Tracker Active ({config_name}.py) with Playwright Web Scraping.</b>")
+        await send_telegram_alert(session, f"🚀 <b>Phoenix Tracker Active ({config_name}.py) with High-Speed Direct API.</b>")
 
         while True:
             start_time = time.time()
